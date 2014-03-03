@@ -1,4 +1,4 @@
-cardamon
+Cardamon
 ========
 
-Regularly monitor University of Michigan Credit Union accounts and post email updates
+A service that regularly monitors your University of Michigan Credit Union account and posts email updates.
