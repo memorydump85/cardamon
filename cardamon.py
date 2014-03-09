@@ -8,7 +8,7 @@ import getpass
 import time, datetime
 import smtplib
 from bs4 import BeautifulSoup
-from StringIO import StringIO
+from cStringIO import StringIO
 import jsonpickle
 import os.path
 import re
@@ -18,16 +18,16 @@ import re
 class WebPageUtil(object):
 #--------------------------------------
     def __init__(self):
-        self.twillbuf = StringIO()
-        twill.set_output(self.twillbuf)
-
+        #ignore twill output, until we need it
+        twill.set_output(StringIO())
 
     def pageinfo(self):
-        self.twillbuf.seek(0)
+        buf = StringIO()
+        twill.set_output(buf)
         twillc.info()
 
         info = {}
-        for line in self.twillbuf.getvalue().split('\n'):
+        for line in buf.getvalue().split('\n'):
             if len(line.strip()) > 0:
                 parts = line.strip().split(': ')
                 if len(parts) > 1:
@@ -58,6 +58,7 @@ class UMCUWeb(object):
 
     def login(self):
         twillc.go('https://www.umcu.org/')
+        self.pgutil.ensure_url('https://www.umcu.org/')
         twillc.fv('4', 'UsernameField', self.username)
         twillc.submit('SubmitNext')
 
@@ -111,7 +112,6 @@ Lets begin now ...
         
         holds = [ re.sub('\s{2,}', '|', row.text.strip())
                     for row in soup.select('#HoldsId table tr.BasicLine')]
-        holds.reverse()
         return holds
 
 
@@ -126,27 +126,31 @@ class CardHoldHistory(object):
             self.holds = []
 
 
-    def merge(self, holds):
-        if (holds is None) or (len(holds)==0):
+    def merge(self, posted):
+        if (posted is None) or (len(posted)==0):
             return None
 
-        K = len(holds)
-        print '  %d holds found' % K
+        print '  %d holds found' % len(posted)
 
-        # merge new hold with existing. compare tail of existing list
-        # with head of new hold list. the old and new lists might overlap
+        old = self.holds
+        N  = len(old)
+        K = min(N, len(posted))
+
+        # merge posted hold with existing. compare tail of existing list
+        # with head of posted hold list. the old and posted lists might overlap
         # so find the truly new holds.
-        for k in range(K+1):
-            R = K-k
-            if self.holds[-R:] == holds[:R]:
-                self.holds.extend(holds[R:])
-                self.holds = self.holds[-100:]  # max 100 entries
+        for k in range(K,-1,-1):
+            print k, old[N-k:], posted[:k], old[N-k:] == posted[:k]
+            if old[N-k:] == posted[:k]:
+                new_holds = posted[k:]
+                old.extend(new_holds)
+                old = old[-1000:]  # max 1000 entries
 
                 with open('holds.json', 'w') as jsonfile:
-                    jsonfile.write(jsonpickle.encode(self.holds))
+                    jsonfile.write(jsonpickle.encode(old))
 
-                print '  New holds:', holds[R:]
-                return holds[R:]
+                print '  New holds:', new_holds
+                return new_holds
 
 
 #--------------------------------------
@@ -221,6 +225,7 @@ def main():
 
     # Start monitoring holds
     while True:
+        umcu.login()
         posted = umcu.get_posted_holds()
         new_holds = hist.merge(posted)
 
@@ -231,10 +236,10 @@ def main():
                 subject = '%s: %s' % (info[-1], info[2])
 
                 msg = '''%s on %s for account %s''' % (info[0], info[3], info[1])
-                msg += '\n\n(notification by cardamon)'
-                gmail.send_email([gmail.username], '[$] '+subject, msg)
+                msg += '\n(notification by cardamon)'
+                gmail.send_email([gmail.username], subject, msg)
         
-        time.sleep(2*60) # Refresh every 2 mins
+        time.sleep(15*60) # Refresh every 15 mins
 
 
 if __name__ == '__main__':
