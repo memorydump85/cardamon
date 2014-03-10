@@ -2,19 +2,42 @@
 
 import twill
 import twill.commands as twillc
-import string
-import sys, traceback
-import getpass
-import time, datetime
-import smtplib
 from bs4 import BeautifulSoup
 from cStringIO import StringIO
-import jsonpickle
-import os.path
+import string
 import re
+import sys
+import os.path
+import time
+import datetime
+import smtplib
+import getpass
+import jsonpickle
+import keyring
+from collections import Counter
 
 
-#-------------------------------------- 
+#--------------------------------------
+class SecureStorage(object):
+#--------------------------------------
+    forget_stored = False
+
+    @staticmethod
+    def get(objname, hidden_input=True):
+        value = keyring.get_password('cardamon', objname)
+        if value is None or SecureStorage.forget_stored:
+            if hidden_input:
+                value = getpass.getpass(objname + ': ')
+            else:
+                value = raw_input(objname + ': ')
+            keyring.set_password('cardamon', objname, value)
+        else:
+            print '%s: [using stored info]' % objname
+        
+        return value
+
+
+#--------------------------------------
 class WebPageUtil(object):
 #--------------------------------------
     def __init__(self):
@@ -43,9 +66,8 @@ class WebPageUtil(object):
             status = self.pageinfo()
 
         if (status['URL'] != url or status['HTTP code'] != '200'):
-            print status
-            traceback.print_stack()
-            sys.exit(-1)
+            status['URL0'] = url
+            raise Exception(str(status))
 
 
 #--------------------------------------
@@ -72,31 +94,40 @@ class UMCUWeb(object):
 
     def login_interactive(self):
         print '''
-I will ask you for you UMCU login information. I will take
-care not to record this information anywhere.
+Cardamon will need your UMCU and GMail login information.
+The UMCU login information will be used to automatically
+login into the UMCU web-portal and monitor your holds.
+The GMail login information will be used to send e-mails
+when new holds are posted to your account. All login
+information will be stored SECURELY.
+
+To re-enter login information start cardamon with the
+--from-scratch flag:
+  ./cardamon.py --from-scratch
 
 Remember that UMCU freezes weblogins after three
-unsuccessful attempts. If I fail to log you in, please go
-to https://www.umcu.org/ and verify your login information
+unsuccessful attempts. If login fails for any reason, please
+go to https://www.umcu.org/ and verify your login
+information
 
 Lets begin now ...
 
 '''
         twillc.go('https://www.umcu.org/')
-        self.username = raw_input('UMCU UserName: ')
+        self.username = SecureStorage.get('UMCU UserName', False)
         twillc.fv('4', 'UsernameField', self.username)
         twillc.submit('SubmitNext')
 
         self.pgutil.ensure_url('https://my.umcu.org/User/AccessSignin/Password')
-        self.password = getpass.getpass('UMCU Password: ')
+        self.password = SecureStorage.get('UMCU Password')
         twillc.fv('1', 'PasswordField', self.password)
         twillc.submit('SubmitNext')
 
-        print 'UMCU wants you to answer a security question:\n'
+        print 'UMCU wants you to answer a security question:'
         self.pgutil.ensure_url('https://my.umcu.org/User/AccessSignin/Challenge')
         soup = BeautifulSoup(twillc.show())
-        print soup.select('#AccessForm td')[2].text
-        twillc.fv('1', 'Answer', raw_input('Security Challenge Answer: '))
+        question = soup.select('#AccessForm td')[2].text.strip() + '\n'
+        twillc.fv('1', 'Answer', SecureStorage.get(question, False))
         twillc.fv('1', 'Remember', 'True')        
         twillc.submit('SubmitNext')
 
@@ -128,29 +159,20 @@ class CardHoldHistory(object):
 
     def merge(self, posted):
         if (posted is None) or (len(posted)==0):
-            return None
+            return []
 
-        print '  %d holds found' % len(posted)
+        old_set = set(self.holds)
+        new_holds = list(set(posted) - old_set)
 
-        old = self.holds
-        N  = len(old)
-        K = min(N, len(posted))
+        if len(new_holds) > 0:
+            self.holds.extend(new_holds)
+            self.holds = self.holds[-1000:]   # max 1000 entries
 
-        # merge posted hold with existing. compare tail of existing list
-        # with head of posted hold list. the old and posted lists might overlap
-        # so find the truly new holds.
-        for k in range(K,-1,-1):
-            print k, old[N-k:], posted[:k], old[N-k:] == posted[:k]
-            if old[N-k:] == posted[:k]:
-                new_holds = posted[k:]
-                old.extend(new_holds)
-                old = old[-1000:]  # max 1000 entries
+            with open('holds.json', 'w') as jsonfile:
+                jsonfile.write(jsonpickle.encode(self.holds))
 
-                with open('holds.json', 'w') as jsonfile:
-                    jsonfile.write(jsonpickle.encode(old))
-
-                print '  New holds:', new_holds
-                return new_holds
+        print '  %d holds found. %d new holds' % (len(posted), len(new_holds))
+        return new_holds
 
 
 #--------------------------------------
@@ -162,13 +184,8 @@ class GMailAccount(object):
 
 
     def login_interactive(self):
-        print '''\
-I will need your GMail credentials to send mails to you.
-I will not record this information anywhere.
-
-'''        
-        self.username = raw_input('GMail UserName: ')
-        self.password = getpass.getpass('GMail password: ')
+        self.username = SecureStorage.get('GMail UserName', False)
+        self.password = SecureStorage.get('GMail password')
 
         if not self.username.endswith('@gmail.com'):
             self.username = self.username + '@gmail.com'
@@ -226,10 +243,30 @@ def main():
     # Start monitoring holds
     while True:
         umcu.login()
-        posted = umcu.get_posted_holds()
+ 
+        try:
+            posted = umcu.get_posted_holds()
+        except Exception, e:
+            print (e, '\n\nPausing holds monitoring because of exception\n',
+                      'Will resume in 60 mins')
+            gmail.send_email([gmail.username], 'Holds monitoring paused' +
+                'An exception was encountered. Holds monitoring will be paused for 60 mins\n' +
+                '(notification by cardamon)')
+            time.sleep(60*60)
+            continue
+
+        # Are there duplicate posts?
+        duplicates = [k for k, v in Counter(posted).items() if v > 1]
+        if len(duplicates) > 0:
+            msg = 'The following holds may have been posted multiple times to your account:\n'
+            for hold in duplicates:
+                msg += '    ' + '  '.join(hold.split('|')) + '\n'
+            msg += '(notification by cardamon)'
+            gmail.send_email([gmail.username], 'Duplicate Holds', msg)
+
         new_holds = hist.merge(posted)
 
-        if new_holds is not None:
+        if len(new_holds) > 0:
             for hold in new_holds:
                 print '  Notifying: ' + hold
                 info = hold.split('|')
@@ -243,4 +280,7 @@ def main():
 
 
 if __name__ == '__main__':
+    if len(sys.argv) > 1 and sys.argv[1] == '--from-scratch':
+        SecureStorage.forget_stored = True
+
     main()
