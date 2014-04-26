@@ -242,18 +242,8 @@ def main():
 
     # Start monitoring holds
     while True:
-        umcu.login()
- 
-        try:
-            posted = umcu.get_posted_holds()
-        except Exception, e:
-            print (e, '\n\nPausing holds monitoring because of exception\n',
-                      'Will resume in 60 mins')
-            gmail.send_email([gmail.username], 'Holds monitoring paused' +
-                'An exception was encountered. Holds monitoring will be paused for 60 mins\n' +
-                '(notification by cardamon)')
-            time.sleep(60*60)
-            continue
+        umcu.login() 
+        posted = umcu.get_posted_holds()
 
         # Are there duplicate posts?
         duplicates = [k for k, v in Counter(posted).items() if v > 1]
@@ -283,4 +273,20 @@ if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == '--from-scratch':
         SecureStorage.forget_stored = True
 
-    main()
+    # We need to keep running, no matter what.
+    # Se we catch all exceptions, notify the user
+    # and continue
+    while True:
+        try:
+            main()
+        except:
+            e = sys.exc_info()[0]
+            print (e, '\n\nPausing holds monitoring because of exception\n',
+                      'Will resume in 60 mins')
+            gmail.send_email([gmail.username], 'Unexpected System Exception!',
+                'An exception was encountered. Holds monitoring will '+
+                'resume in 60 mins\n\n' +
+                'Exception info:\n' + str(e) + '\n\n'
+                '(notification by cardamon)')
+            time.sleep(60*60)
+            continue
