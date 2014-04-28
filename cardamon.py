@@ -12,6 +12,7 @@ import time
 import datetime
 import smtplib
 import getpass
+import traceback
 import jsonpickle
 import keyring
 from collections import Counter
@@ -219,6 +220,9 @@ class GMailAccount(object):
 
 def main():
 #--------------------------------------
+    twillc.agent('Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:28.0)' +
+                 ' Gecko/20100101 Firefox/28.0')
+
     umcu = UMCUWeb()
     umcu.login_interactive()
 
@@ -280,13 +284,18 @@ if __name__ == '__main__':
         try:
             main()
         except:
-            e = sys.exc_info()[0]
-            print (e, '\n\nPausing holds monitoring because of exception\n',
-                      'Will resume in 60 mins')
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            exc_lines = traceback.format_exception(exc_type, exc_value, exc_traceback)
+            exc_descr = ''.join('  ' + line for line in exc_lines)
+            print (exc_descr + '\n\nPausing holds monitoring because of exception\n' +
+                  'Will resume in 60 mins')
+
+            gmail = GMailAccount()
+            gmail.login_interactive()
             gmail.send_email([gmail.username], 'Unexpected System Exception!',
                 'An exception was encountered. Holds monitoring will '+
                 'resume in 60 mins\n\n' +
-                'Exception info:\n' + str(e) + '\n\n'
+                'Exception info:\n' + exc_descr + '\n\n'
                 '(notification by cardamon)')
             time.sleep(60*60)
             continue
