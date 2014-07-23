@@ -82,8 +82,14 @@ class UMCUWeb(object):
     def login(self):
         twillc.go('https://www.umcu.org/')
         self.pgutil.ensure_url('https://www.umcu.org/')
-        twillc.fv('4', 'UsernameField', self.username)
-        twillc.submit('SubmitNext')
+
+        # Sometimes the UMCU server will act up by going back to the homepage
+        # after the username page. So we stay in a loop until UMCU takes us to
+        # the password page
+        while self.pgutil.pageinfo()['URL'] == 'https://www.umcu.org/':
+            self.pgutil.ensure_url('https://www.umcu.org/')
+            twillc.fv('4', 'UsernameField', self.username)
+            twillc.submit('SubmitNext')
 
         self.pgutil.ensure_url('https://my.umcu.org/User/AccessSignin/Password')
         twillc.fv('1', 'PasswordField', self.password)
