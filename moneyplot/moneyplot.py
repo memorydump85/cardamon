@@ -1,8 +1,3 @@
-#!/usr/bin/python
-
-# Basd on the gist from
-# http://www.voidynullness.net/blog/2013/07/25/gmail-email-with-python-via-imap/
-
 import sys
 import imaplib2 as imaplib
 import keyring
