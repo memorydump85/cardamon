@@ -1,3 +1,5 @@
 holds.json
 nohup.out
-
+clientinfo.py
+*.pyc
+*.jsonl
